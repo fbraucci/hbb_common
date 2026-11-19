@@ -847,7 +847,7 @@ impl Config {
         }
     }
 
-    fn store(&self) {
+    fn store(&mut self) {
         let mut config = self.clone();
         Self::prepare_config_for_store(&mut config);
         if !config.password.is_empty()
@@ -919,6 +919,12 @@ impl Config {
 
         // The cross-process lock remains held through the write.
         Config::store_(&config, "");
+
+        // Update the in-memory identity only after a successful write.
+        // Subsequent saves must use the latest persisted identity
+        // as their baseline, including after an intentional ID change.
+        self.enc_id = config.enc_id;
+        self.key_pair = config.key_pair;
 
 
     }
@@ -4298,6 +4304,11 @@ mod tests {
             assert!(encrypted);
             assert_eq!(stored_id, updated_id);
             assert_eq!(Config::get().id, updated_id);
+            assert_eq!(
+                Config::get().enc_id,
+                stored,
+                "In-memory encrypted ID must match the persisted ID"
+            );
         });
     }
 
