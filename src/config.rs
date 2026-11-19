@@ -1737,30 +1737,34 @@ impl Config {
 
     // TODO: `Config::set()` does not invalidate trusted devices when permanent password/salt changes.
     // This matches historical behavior, but may need revisiting in a separate PR.
+    
     pub fn set(cfg: Config) -> bool {
         let mut lock = CONFIG.write().unwrap();
         if *lock == cfg {
             return false;
         }
+
         *lock = cfg;
         lock.store();
-        // Drop CONFIG lock before acquiring KEY_PAIR lock to avoid potential deadlock.
-        #[cfg(target_os = "macos")]
+
+        // Release CONFIG before acquiring KEY_PAIR to avoid deadlocks.
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         let new_key_pair = lock.key_pair.clone();
+
         drop(lock);
-        #[cfg(target_os = "macos")]
+
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         Self::invalidate_key_pair_cache_if_changed(&new_key_pair);
+
         true
     }
 
-    /// Invalidate KEY_PAIR cache if it differs from the new key_pair.
-    /// Use None to invalidate the cache instead of Some(key_pair).
-    /// If we use Some with an empty key_pair, get_key_pair() would always return
-    /// the empty key_pair from cache without regenerating.
-    /// By clearing the cache, get_key_pair() will reload and regenerate if needed.
-    #[cfg(target_os = "macos")]
+    /// Invalidate the cached key pair when the persisted identity changes.
+    /// Do not cache an empty key pair.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn invalidate_key_pair_cache_if_changed(new_key_pair: &KeyPair) {
         let mut key_pair_cache = KEY_PAIR.lock().unwrap();
+
         if let Some(cached) = key_pair_cache.as_ref() {
             if cached != new_key_pair {
                 *key_pair_cache = None;
