@@ -1269,71 +1269,80 @@ impl Config {
 
     
     
+    
     pub fn get_key_pair() -> KeyPair {
-        // Do not acquire CONFIG here: this function may be reached
-        // through get_uuid() during CONFIG initialization.
+        // Do not acquire CONFIG: this function may be called
+        // during CONFIG initialization through get_uuid().
         let mut cache = KEY_PAIR.lock().unwrap();
 
         if let Some(pair) = cache.as_ref() {
             return pair.clone();
         }
 
-        // Coordinate key initialization and primary configuration
-        // writes within this process. No CONFIG lock is acquired.
         let _write_guard = PRIMARY_CONFIG_WRITE_LOCK.lock().unwrap();
 
-        let config_file = Self::file();
-        let first_run = match fs::symlink_metadata(&config_file) {
+        let pair = Self::load_or_create_key_pair_at_path(
+            &Self::file(),
+            Self::gen_id,
+        );
+
+        *cache = Some(pair.clone());
+        pair
+    }
+
+    // Isolated file operation: can be tested with temporary paths
+    // without changing APP_NAME, CONFIG or the global key cache.
+    // The caller is responsible for coordinating concurrent writes.
+    fn load_or_create_key_pair_at_path(
+        file: &Path,
+        gen_id: impl FnOnce() -> Option<String>,
+    ) -> KeyPair {
+        let first_run = match fs::symlink_metadata(file) {
             Ok(_) => false,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
             Err(err) => {
                 panic!(
                     "BetterDesk: cannot inspect device configuration '{}': {}",
-                    config_file.display(),
+                    file.display(),
                     err
                 );
             }
         };
 
-        // Read the latest persisted state under the write lock.
-        let mut config = Config::load_::<Config>("");
+        let mut config: Config = Self::load_primary_path(file);
 
-        if config.key_pair.0.is_empty() {
-            if config.enc_id.is_empty() && config.id.is_empty() {
-                if !first_run {
-                    panic!(
-                        "BetterDesk: existing configuration has no device ID. Refusing to generate a replacement identity."
-                    );
-                }
-
-                // Create an ID before saving the first key pair.
-                // Store the ID in the legacy plaintext field for now:
-                // Config::load() will migrate it to enc_id.
-                // Do not encrypt here: encryption can re-enter
-                // get_key_pair() when the machine UUID is unavailable.
-                config.id = Self::gen_id()
-                    .filter(|id| !id.is_empty())
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "BetterDesk: cannot generate the initial device ID."
-                        )
-                    });
+        if config.enc_id.is_empty() && config.id.is_empty() {
+            if !first_run {
+                panic!(
+                    "BetterDesk: existing configuration has no device ID. Refusing to generate a replacement identity."
+                );
             }
 
+            config.id = gen_id()
+                .filter(|id| !id.is_empty())
+                .unwrap_or_else(|| {
+                    panic!("BetterDesk: cannot generate the initial device ID.")
+                });
+        }
+
+        if config.key_pair.0.is_empty() {
             let (pk, sk) = sign::gen_keypair();
             config.key_pair = (sk.0.to_vec(), pk.0.to_vec());
 
-            // Save before exposing the generated key pair.
-            // This is a raw serialization operation without
-            // encryption or CONFIG access.
-            Config::store_(&config, "");
+            if let Err(err) = store_path(file.to_path_buf(), &config) {
+                panic!(
+                    "BetterDesk: cannot persist device identity '{}': {}",
+                    file.display(),
+                    err
+                );
+            }
 
             log::info!("Device key pair persisted");
         }
 
-        *cache = Some(config.key_pair.clone());
         config.key_pair
     }
+
 
 
 
