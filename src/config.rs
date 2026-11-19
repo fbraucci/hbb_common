@@ -1227,28 +1227,63 @@ impl Config {
         config.store();
     }
 
+    
     pub fn get_key_pair() -> KeyPair {
-        // lock here to make sure no gen_keypair more than once
-        // no use of CONFIG directly here to ensure no recursive calling in Config::load because of password dec which calling this function
-        let mut lock = KEY_PAIR.lock().unwrap();
-        if let Some(p) = lock.as_ref() {
-            return p.clone();
+        // Never acquire CONFIG while holding KEY_PAIR: configuration
+        // encryption can call get_uuid(), which can call this function.
+        let mut cache = KEY_PAIR.lock().unwrap();
+
+        if let Some(pair) = cache.as_ref() {
+            return pair.clone();
         }
+
         let mut config = Config::load_::<Config>("");
+
         if config.key_pair.0.is_empty() {
-            log::info!("Generated new keypair for id: {}", config.id);
-            let (pk, sk) = sign::gen_keypair();
-            let key_pair = (sk.0.to_vec(), pk.0.into());
-            config.key_pair = key_pair.clone();
-            std::thread::spawn(|| {
-                let mut config = CONFIG.write().unwrap();
-                config.key_pair = key_pair;
-                config.store();
-            });
+            if config.enc_id.is_empty() && config.id.is_empty() {
+                // First-run initialization still needs a separate
+                // bootstrap fix. Preserve its previous behavior for now.
+                let (pk, sk) = sign::gen_keypair();
+                let pair = (sk.0.to_vec(), pk.0.to_vec());
+                config.key_pair = pair.clone();
+
+                std::thread::spawn(move || {
+                    let mut current = CONFIG.write().unwrap();
+                    current.key_pair = pair;
+                    current.store();
+                });
+            } else {
+                // KEY_PAIR -> PRIMARY_CONFIG_WRITE_LOCK is safe here:
+                // the protected raw file operations do not acquire
+                // CONFIG or re-enter KEY_PAIR.
+                let _write_guard = PRIMARY_CONFIG_WRITE_LOCK.lock().unwrap();
+
+                // Re-read after taking the write lock, so a key
+                // persisted by another thread is not replaced.
+                config = Config::load_::<Config>("");
+
+                if config.key_pair.0.is_empty() {
+                    if config.enc_id.is_empty() && config.id.is_empty() {
+                        panic!(
+                            "BetterDesk: device ID disappeared during key initialization."
+                        );
+                    }
+
+                    let (pk, sk) = sign::gen_keypair();
+                    config.key_pair = (sk.0.to_vec(), pk.0.to_vec());
+
+                    // Persist before returning the key pair.
+                    // This raw store must not perform encryption.
+                    Config::store_(&config, "");
+                    log::info!("Generated and persisted device key pair");
+                }
+            }
         }
-        *lock = Some(config.key_pair.clone());
+
+        *cache = Some(config.key_pair.clone());
         config.key_pair
     }
+
 
     pub fn get_cached_pk() -> Option<Vec<u8>> {
         KEY_PAIR.lock().unwrap().clone().map(|k| k.1)
