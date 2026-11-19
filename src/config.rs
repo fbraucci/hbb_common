@@ -4314,6 +4314,7 @@ mod tests {
     #[test]
     fn test_set_does_not_convert_plaintext_permanent_password_to_storage_format_in_memory() {
         let mut cfg = Config::default();
+        cfg.id = "123456789".to_owned();
         cfg.password = "legacy-secret".to_owned();
         cfg.salt = "".to_owned();
 
@@ -4330,6 +4331,7 @@ mod tests {
     #[test]
     fn test_set_keeps_plaintext_permanent_password_with_current_prefix_in_memory() {
         let mut cfg = Config::default();
+        cfg.id = "123456789".to_owned();
         cfg.password = "01legacy-secret".to_owned();
         cfg.salt = "".to_owned();
 
