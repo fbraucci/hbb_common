@@ -1268,61 +1268,73 @@ impl Config {
     }
 
     
+    
     pub fn get_key_pair() -> KeyPair {
-        // Never acquire CONFIG while holding KEY_PAIR: configuration
-        // encryption can call get_uuid(), which can call this function.
+        // Do not acquire CONFIG here: this function may be reached
+        // through get_uuid() during CONFIG initialization.
         let mut cache = KEY_PAIR.lock().unwrap();
 
         if let Some(pair) = cache.as_ref() {
             return pair.clone();
         }
 
+        // Coordinate key initialization and primary configuration
+        // writes within this process. No CONFIG lock is acquired.
+        let _write_guard = PRIMARY_CONFIG_WRITE_LOCK.lock().unwrap();
+
+        let config_file = Self::file();
+        let first_run = match fs::symlink_metadata(&config_file) {
+            Ok(_) => false,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+            Err(err) => {
+                panic!(
+                    "BetterDesk: cannot inspect device configuration '{}': {}",
+                    config_file.display(),
+                    err
+                );
+            }
+        };
+
+        // Read the latest persisted state under the write lock.
         let mut config = Config::load_::<Config>("");
 
         if config.key_pair.0.is_empty() {
             if config.enc_id.is_empty() && config.id.is_empty() {
-                // First-run initialization still needs a separate
-                // bootstrap fix. Preserve its previous behavior for now.
-                let (pk, sk) = sign::gen_keypair();
-                let pair = (sk.0.to_vec(), pk.0.to_vec());
-                config.key_pair = pair.clone();
-
-                std::thread::spawn(move || {
-                    let mut current = CONFIG.write().unwrap();
-                    current.key_pair = pair;
-                    current.store();
-                });
-            } else {
-                // KEY_PAIR -> PRIMARY_CONFIG_WRITE_LOCK is safe here:
-                // the protected raw file operations do not acquire
-                // CONFIG or re-enter KEY_PAIR.
-                let _write_guard = PRIMARY_CONFIG_WRITE_LOCK.lock().unwrap();
-
-                // Re-read after taking the write lock, so a key
-                // persisted by another thread is not replaced.
-                config = Config::load_::<Config>("");
-
-                if config.key_pair.0.is_empty() {
-                    if config.enc_id.is_empty() && config.id.is_empty() {
-                        panic!(
-                            "BetterDesk: device ID disappeared during key initialization."
-                        );
-                    }
-
-                    let (pk, sk) = sign::gen_keypair();
-                    config.key_pair = (sk.0.to_vec(), pk.0.to_vec());
-
-                    // Persist before returning the key pair.
-                    // This raw store must not perform encryption.
-                    Config::store_(&config, "");
-                    log::info!("Generated and persisted device key pair");
+                if !first_run {
+                    panic!(
+                        "BetterDesk: existing configuration has no device ID. Refusing to generate a replacement identity."
+                    );
                 }
+
+                // Create an ID before saving the first key pair.
+                // Store the ID in the legacy plaintext field for now:
+                // Config::load() will migrate it to enc_id.
+                // Do not encrypt here: encryption can re-enter
+                // get_key_pair() when the machine UUID is unavailable.
+                config.id = Self::gen_id()
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "BetterDesk: cannot generate the initial device ID."
+                        )
+                    });
             }
+
+            let (pk, sk) = sign::gen_keypair();
+            config.key_pair = (sk.0.to_vec(), pk.0.to_vec());
+
+            // Save before exposing the generated key pair.
+            // This is a raw serialization operation without
+            // encryption or CONFIG access.
+            Config::store_(&config, "");
+
+            log::info!("Device key pair persisted");
         }
 
         *cache = Some(config.key_pair.clone());
         config.key_pair
     }
+
 
 
     pub fn get_cached_pk() -> Option<Vec<u8>> {
