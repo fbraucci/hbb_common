@@ -642,12 +642,27 @@ impl Config {
     }
 
 
+    
     fn store_<T: serde::Serialize>(config: &T, suffix: &str) {
         let file = Self::file_(suffix);
-        if let Err(err) = store_path(file, config) {
-            log::error!("Failed to store {suffix} config: {err}");
+
+        if let Err(err) = store_path(file.clone(), config) {
+            if suffix.is_empty() {
+                panic!(
+                    "BetterDesk: failed to save primary device configuration '{}': {}. Refusing to continue because device identity persistence is not guaranteed.",
+                    file.display(),
+                    err
+                );
+            }
+
+            log::error!(
+                "Failed to store auxiliary configuration '{}': {}",
+                file.display(),
+                err
+            );
         }
     }
+
 
     
     fn load() -> Config {
