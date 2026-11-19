@@ -4258,6 +4258,13 @@ mod tests {
         let original_enc_id = cfg.enc_id.clone();
 
         with_config_and_hard_settings(Config::default(), HashMap::new(), || {
+            
+            // Establish the expected original identity on disk.
+            let _file_guard = ConfigFileRestoreGuard::new(Config::file());
+            let mut previous = Config::default();
+            previous.enc_id = original_enc_id.clone();
+            Config::store_(&previous, "");
+
             assert!(Config::set(cfg));
 
             assert_eq!(Config::load().enc_id, original_enc_id);
@@ -4276,6 +4283,13 @@ mod tests {
         cfg.enc_id = original_enc_id.clone();
 
         with_config_and_hard_settings(Config::default(), HashMap::new(), || {
+            
+            // Establish the expected original identity on disk.
+            let _file_guard = ConfigFileRestoreGuard::new(Config::file());
+            let mut previous = Config::default();
+            previous.enc_id = original_enc_id.clone();
+            Config::store_(&previous, "");
+
             assert!(Config::set(cfg));
 
             let stored = Config::load().enc_id;
