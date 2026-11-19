@@ -615,29 +615,37 @@ pub fn store_path<T: serde::Serialize>(path: PathBuf, cfg: T) -> crate::ResultTy
 
 impl Config {
     
+    
     fn load_<T: serde::Serialize + serde::de::DeserializeOwned + Default + std::fmt::Debug>(
         suffix: &str,
     ) -> T {
         let file = Self::file_(suffix);
-
         if suffix.is_empty() {
-            match confy::load_path(&file) {
-                Ok(config) => config,
-                Err(confy::ConfyError::GeneralLoadError(ref err))
-                    if err.kind() == std::io::ErrorKind::NotFound =>
-                {
-                    T::default()
-                }
-                Err(err) => {
-                    panic!(
-                        "BetterDesk: cannot load primary configuration '{}': {}. Refusing to continue to protect device identity.",
-                        file.display(),
-                        err
-                    );
-                }
-            }
+            Self::load_primary_path(&file)
         } else {
             load_path(file)
+        }
+    }
+
+    fn load_primary_path<
+        T: serde::Serialize + serde::de::DeserializeOwned + Default + std::fmt::Debug,
+    >(
+        file: &Path,
+    ) -> T {
+        match confy::load_path(file) {
+            Ok(config) => config,
+            Err(confy::ConfyError::GeneralLoadError(ref err))
+                if err.kind() == std::io::ErrorKind::NotFound =>
+            {
+                T::default()
+            }
+            Err(err) => {
+                panic!(
+                    "BetterDesk: cannot load primary configuration '{}': {}. Refusing to continue to protect device identity.",
+                    file.display(),
+                    err
+                );
+            }
         }
     }
 
@@ -3578,6 +3586,44 @@ mod tests {
         });
     }
 
+    
+    #[test]
+    fn test_primary_config_missing_returns_default() {
+        let path = std::env::temp_dir().join(format!(
+            "betterdesk-identity-missing-{}.toml",
+            uuid::Uuid::new_v4()
+        ));
+
+        let config: Config = Config::load_primary_path(&path);
+
+        assert!(config.id.is_empty());
+        assert!(config.key_pair.0.is_empty());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn test_primary_config_corruption_preserves_file() {
+        let path = std::env::temp_dir().join(format!(
+            "betterdesk-identity-corrupt-{}.toml",
+            uuid::Uuid::new_v4()
+        ));
+
+        let corrupted = b"[unclosed";
+        fs::write(&path, corrupted).unwrap();
+
+        let result = std::panic::catch_unwind(|| {
+            let _: Config = Config::load_primary_path(&path);
+        });
+
+        assert!(
+            result.is_err(),
+            "Corrupted identity configuration must not load as default"
+        );
+        assert_eq!(fs::read(&path).unwrap(), corrupted);
+
+        fs::remove_file(&path).unwrap();
+    }
+           
     #[test]
     fn test_serialize() {
         let cfg: Config = Default::default();
