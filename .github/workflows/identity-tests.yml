@@ -32,6 +32,8 @@ jobs:
             libxcursor-dev libxfixes-dev libxext-dev \
             libwayland-dev
 
+      
       - name: Run identity tests
         run: |
-          cargo test --lib test_primary_config_ -- --nocapture
+          cargo test --lib
+
