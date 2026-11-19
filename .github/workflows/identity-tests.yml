@@ -1,0 +1,37 @@
+name: BetterDesk Identity Tests
+
+on:
+  push:
+    branches:
+      - fix/windows-identity-persistence-a1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  identity-tests:
+    name: Rust identity regression tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config libssl-dev libudev-dev \
+            libx11-dev libxi-dev libxtst-dev \
+            libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxfixes-dev libxext-dev \
+            libwayland-dev
+
+      - name: Run identity tests
+        run: |
+          cargo test --lib test_primary_config_ -- --nocapture
