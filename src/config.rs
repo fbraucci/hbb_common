@@ -3888,6 +3888,147 @@ mod tests {
         fs::remove_dir(&test_dir).unwrap();
 
     }
+
+    
+    // Worker launched as a separate operating-system process.
+    #[test]
+    fn test_identity_lock_subprocess_worker() {
+        let Ok(path) = std::env::var("BETTERDESK_IDENTITY_TEST_PATH") else {
+            return;
+        };
+
+        let id = std::env::var("BETTERDESK_IDENTITY_TEST_ID").unwrap();
+        let ready = std::env::var("BETTERDESK_IDENTITY_TEST_READY").unwrap();
+        let result = std::env::var("BETTERDESK_IDENTITY_TEST_RESULT").unwrap();
+
+        sodiumoxide::init().expect("libsodium initialization failed");
+
+        fs::write(ready, b"ready").unwrap();
+
+        let pair = Config::load_or_create_key_pair_at_path(
+            Path::new(&path),
+            || Some(id),
+        );
+
+        fs::write(result, pair.1).unwrap();
+    }
+
+    #[test]
+    fn test_identity_lock_serializes_two_processes() {
+        let test_dir = std::env::temp_dir().join(format!(
+            "betterdesk-process-lock-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&test_dir).unwrap();
+
+        let path = test_dir.join("identity.toml");
+        let lock_path = path.with_extension("identity.lock");
+
+        // Hold the lock so both child processes reach the
+        // initialization point before either can write.
+        let lock_file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(&lock_path)
+            .unwrap();
+
+        fs2::FileExt::lock_exclusive(&lock_file).unwrap();
+
+        let executable = std::env::current_exe().unwrap();
+
+        let spawn_worker = |label: &str| {
+            let ready = test_dir.join(format!("ready-{label}"));
+            let result = test_dir.join(format!("result-{label}"));
+
+            let child = std::process::Command::new(&executable)
+                .arg("--exact")
+                .arg("config::tests::test_identity_lock_subprocess_worker")
+                .env("BETTERDESK_IDENTITY_TEST_PATH", &path)
+                .env(
+                    "BETTERDESK_IDENTITY_TEST_ID",
+                    format!("device-{label}"),
+                )
+                .env("BETTERDESK_IDENTITY_TEST_READY", &ready)
+                .env("BETTERDESK_IDENTITY_TEST_RESULT", &result)
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+
+            (child, ready, result)
+        };
+
+        let (mut child_a, ready_a, result_a) = spawn_worker("A");
+        let (mut child_b, ready_b, result_b) = spawn_worker("B");
+
+        let started = Instant::now();
+
+        while !(ready_a.exists() && ready_b.exists())
+            && started.elapsed() < Duration::from_secs(30)
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        if !(ready_a.exists() && ready_b.exists()) {
+            let _ = fs2::FileExt::unlock(&lock_file);
+            let _ = child_a.kill();
+            let _ = child_b.kill();
+            let _ = child_a.wait();
+            let _ = child_b.wait();
+            panic!("Both identity worker processes must start");
+        }
+
+        // Both workers have started. Allow them to compete
+        // for the same identity file.
+        fs2::FileExt::unlock(&lock_file).unwrap();
+        drop(lock_file);
+
+        let started = Instant::now();
+
+        let (status_a, status_b) = loop {
+            let a = child_a.try_wait().unwrap();
+            let b = child_b.try_wait().unwrap();
+
+            if let (Some(a), Some(b)) = (a, b) {
+                break (a, b);
+            }
+
+            if started.elapsed() >= Duration::from_secs(30) {
+                let _ = child_a.kill();
+                let _ = child_b.kill();
+                let _ = child_a.wait();
+                let _ = child_b.wait();
+                panic!("Identity worker processes timed out");
+            }
+
+            std::thread::sleep(Duration::from_millis(20));
+        };
+
+        assert!(status_a.success(), "First worker failed");
+        assert!(status_b.success(), "Second worker failed");
+
+        let public_a = fs::read(&result_a).unwrap();
+        let public_b = fs::read(&result_b).unwrap();
+
+        assert_eq!(
+            public_a, public_b,
+            "Concurrent processes generated different device keys"
+        );
+
+        let stored: Config = Config::load_primary_path(&path);
+
+        assert!(
+            stored.id == "device-A" || stored.id == "device-B",
+            "Unexpected persisted device ID"
+        );
+
+        assert_eq!(
+            stored.key_pair.1, public_a,
+            "Persisted public key differs from worker results"
+        );
+
+        // All child processes have exited; remove test files.
+        fs::remove_dir_all(&test_dir).unwrap();
+    }
            
     #[test]
     fn test_serialize() {
