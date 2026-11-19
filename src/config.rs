@@ -900,6 +900,19 @@ impl Config {
         // Read the latest persisted configuration only after
         // acquiring both locks.
         let stored_config = Config::load_::<Config>("");
+        
+        // Detect an identity change made by another process
+        // since this configuration was last loaded or saved.
+        // An intentional local ID change is still permitted,
+        // provided the previously loaded identity matches disk.
+        if !self.enc_id.is_empty()
+            && self.enc_id != stored_config.enc_id
+        {
+            panic!(
+                "BetterDesk: device identity changed on disk since it was loaded. Refusing to overwrite a newer identity."
+            );
+        }
+
 
         if !stored_config.key_pair.0.is_empty() {
             if stored_config.key_pair.1.is_empty() {
