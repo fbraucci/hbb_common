@@ -857,14 +857,34 @@ impl Config {
             config.password =
                 keep_encrypted_storage_if_plaintext_unchanged(&config.password, &stored.password);
         }
+        
+        if config.id.is_empty() {
+            panic!(
+                "BetterDesk: refusing to save a primary configuration with an empty device ID."
+            );
+        }
+
         let (stored_id, encrypted, _) =
             decrypt_str_or_original(&config.enc_id, PASSWORD_ENC_VERSION);
+
         if !encrypted || stored_id != config.id {
             config.enc_id =
                 encrypt_str_or_original(&config.id, PASSWORD_ENC_VERSION, ENCRYPT_MAX_LEN);
         }
-        
-        config.id = "".to_owned();
+
+        // Verify the encrypted ID before removing its plaintext copy.
+        // Encryption failure must never create an unusable identity file.
+        let (verified_id, verified_encrypted, _) =
+            decrypt_str_or_original(&config.enc_id, PASSWORD_ENC_VERSION);
+
+        if !verified_encrypted || verified_id != config.id {
+            panic!(
+                "BetterDesk: encrypted device ID verification failed. Refusing to overwrite the primary configuration."
+            );
+        }
+
+        config.id.clear();
+
 
         // Coordinate primary configuration writes in this process.
         // Do not acquire this lock before the encryption operations
