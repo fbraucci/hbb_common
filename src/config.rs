@@ -649,8 +649,25 @@ impl Config {
         }
     }
 
+    
     fn load() -> Config {
+        // Distinguish a genuinely new installation from an existing
+        // configuration whose identity must never be regenerated.
+        let config_file = Self::file();
+        let first_run = match fs::symlink_metadata(&config_file) {
+            Ok(_) => false,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+            Err(err) => {
+                panic!(
+                    "BetterDesk: cannot inspect primary configuration '{}': {}",
+                    config_file.display(),
+                    err
+                );
+            }
+        };
+
         let mut config = Config::load_::<Config>("");
+
         let mut store = false;
         if let Err(err) = Self::validate_or_decrypt_permanent_password_storage(&mut config) {
             log::error!("Failed to validate or decrypt permanent password storage: {err}");
@@ -675,8 +692,15 @@ impl Config {
             id_valid = true;
             store = true;
         }
+        
         if !id_valid {
-            log::warn!("ID is invalid, generating new one");
+            if !first_run {
+                panic!(
+                    "BetterDesk: existing device configuration has an invalid ID. Refusing to generate a replacement identity."
+                );
+            }
+
+            log::info!("First run: generating device ID");
             for _ in 0..3 {
                 if let Some(id) = Config::gen_id() {
                     config.id = id;
@@ -687,6 +711,7 @@ impl Config {
                 }
             }
         }
+
         if store {
             config.store();
         }
