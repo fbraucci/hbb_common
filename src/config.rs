@@ -1297,6 +1297,44 @@ impl Config {
         file: &Path,
         gen_id: impl FnOnce() -> Option<String>,
     ) -> KeyPair {
+        
+        // Lock a separate file because confy replaces the TOML
+        // through a temporary file and rename.
+        let lock_path = file.with_extension("identity.lock");
+
+        if let Some(parent) = lock_path.parent() {
+            fs::create_dir_all(parent).unwrap_or_else(|err| {
+                panic!(
+                    "BetterDesk: cannot create identity lock directory '{}': {}",
+                    parent.display(),
+                    err
+                )
+            });
+        }
+
+        let lock_file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(&lock_path)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "BetterDesk: cannot open identity lock '{}': {}",
+                    lock_path.display(),
+                    err
+                )
+            });
+
+        fs2::FileExt::lock_exclusive(&lock_file).unwrap_or_else(|err| {
+            panic!(
+                "BetterDesk: cannot lock device identity '{}': {}",
+                lock_path.display(),
+                err
+            )
+        });
+
+        // Keep lock_file alive throughout this function.
+        // The operating system releases the lock on close.
+
         let first_run = match fs::symlink_metadata(file) {
             Ok(_) => false,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
@@ -3844,8 +3882,11 @@ mod tests {
             "Existing identity file was unexpectedly rewritten"
         );
 
+        
         fs::remove_file(&path).unwrap();
+        fs::remove_file(path.with_extension("identity.lock")).unwrap();
         fs::remove_dir(&test_dir).unwrap();
+
     }
            
     #[test]
