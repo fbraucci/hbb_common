@@ -71,6 +71,10 @@ lazy_static::lazy_static! {
     pub static ref EXE_RENDEZVOUS_SERVER: RwLock<String> = Default::default();
     pub static ref APP_NAME: RwLock<String> = RwLock::new("BetterDesk Client".to_owned());
     static ref KEY_PAIR: Mutex<Option<KeyPair>> = Default::default();
+    // Serialize primary configuration read-modify-write operations
+    // within this process. Cross-process coordination is separate.
+    static ref PRIMARY_CONFIG_WRITE_LOCK: Mutex<()> = Default::default();
+
     static ref USER_DEFAULT_CONFIG: RwLock<(UserDefaultConfig, Instant)> = RwLock::new((UserDefaultConfig::load(), Instant::now()));
     pub static ref NEW_STORED_PEER_CONFIG: Mutex<HashSet<String>> = Default::default();
     pub static ref DEFAULT_SETTINGS: RwLock<HashMap<String, String>> = Default::default();
@@ -819,8 +823,26 @@ impl Config {
             config.enc_id =
                 encrypt_str_or_original(&config.id, PASSWORD_ENC_VERSION, ENCRYPT_MAX_LEN);
         }
+        
         config.id = "".to_owned();
+
+        // Coordinate primary configuration writes in this process.
+        // Do not acquire this lock before the encryption operations
+        // above: they may indirectly call get_key_pair().
+        let _write_guard = PRIMARY_CONFIG_WRITE_LOCK.lock().unwrap();
+
+        // Preserve a key pair already persisted on disk when the
+        // in-memory configuration has not received it yet.
+        let stored_config = Config::load_::<Config>("");
+
+        if config.key_pair.0.is_empty()
+            && !stored_config.key_pair.0.is_empty()
+        {
+            config.key_pair = stored_config.key_pair;
+        }
+
         Config::store_(&config, "");
+
     }
 
     pub fn file() -> PathBuf {
