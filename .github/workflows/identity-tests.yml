@@ -11,18 +11,24 @@ permissions:
 
 jobs:
   identity-tests:
-    name: Rust identity regression tests
-    runs-on: ubuntu-latest
+    name: Rust tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install native dependencies
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -32,8 +38,5 @@ jobs:
             libxcursor-dev libxfixes-dev libxext-dev \
             libwayland-dev
 
-      
-      - name: Run identity tests
-        run: |
-          cargo test --lib
-
+      - name: Run complete Rust test suite
+        run: cargo test --lib
