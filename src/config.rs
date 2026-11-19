@@ -869,19 +869,37 @@ impl Config {
         // Coordinate primary configuration writes in this process.
         // Do not acquire this lock before the encryption operations
         // above: they may indirectly call get_key_pair().
+        
+        // Serialize writes inside this process first.
         let _write_guard = PRIMARY_CONFIG_WRITE_LOCK.lock().unwrap();
 
-        // Preserve a key pair already persisted on disk when the
-        // in-memory configuration has not received it yet.
+        // Then serialize them across processes using the
+        // same lock as device key initialization.
+        let _identity_lock = Self::lock_identity_file(&Self::file());
+
+        // Read the latest persisted configuration only after
+        // acquiring both locks.
         let stored_config = Config::load_::<Config>("");
 
-        if config.key_pair.0.is_empty()
-            && !stored_config.key_pair.0.is_empty()
-        {
-            config.key_pair = stored_config.key_pair;
+        if !stored_config.key_pair.0.is_empty() {
+            if stored_config.key_pair.1.is_empty() {
+                panic!(
+                    "BetterDesk: persisted device key pair is incomplete."
+                );
+            }
+
+            if config.key_pair.0.is_empty() {
+                config.key_pair = stored_config.key_pair;
+            } else if config.key_pair != stored_config.key_pair {
+                panic!(
+                    "BetterDesk: refusing to overwrite a different persisted device key pair."
+                );
+            }
         }
 
+        // The cross-process lock remains held through the write.
         Config::store_(&config, "");
+
 
     }
 
@@ -1290,16 +1308,8 @@ impl Config {
         pair
     }
 
-    // Isolated file operation: can be tested with temporary paths
-    // without changing APP_NAME, CONFIG or the global key cache.
-    // The caller is responsible for coordinating concurrent writes.
-    fn load_or_create_key_pair_at_path(
-        file: &Path,
-        gen_id: impl FnOnce() -> Option<String>,
-    ) -> KeyPair {
-        
-        // Lock a separate file because confy replaces the TOML
-        // through a temporary file and rename.
+    
+    fn lock_identity_file(file: &Path) -> fs::File {
         let lock_path = file.with_extension("identity.lock");
 
         if let Some(parent) = lock_path.parent() {
@@ -1332,8 +1342,19 @@ impl Config {
             )
         });
 
-        // Keep lock_file alive throughout this function.
-        // The operating system releases the lock on close.
+        lock_file
+    }
+
+    // Isolated file operation: can be tested with temporary paths
+    // without changing APP_NAME, CONFIG or the global key cache.
+    // The caller is responsible for coordinating concurrent writes.
+    fn load_or_create_key_pair_at_path(
+        file: &Path,
+        gen_id: impl FnOnce() -> Option<String>,
+    ) -> KeyPair {
+        
+                // Keep the cross-process lock until initialization finishes.
+        let _identity_lock = Self::lock_identity_file(file);
 
         let first_run = match fs::symlink_metadata(file) {
             Ok(_) => false,
