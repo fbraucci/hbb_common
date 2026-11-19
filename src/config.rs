@@ -614,16 +614,33 @@ pub fn store_path<T: serde::Serialize>(path: PathBuf, cfg: T) -> crate::ResultTy
 }
 
 impl Config {
+    
     fn load_<T: serde::Serialize + serde::de::DeserializeOwned + Default + std::fmt::Debug>(
         suffix: &str,
     ) -> T {
         let file = Self::file_(suffix);
-        let cfg = load_path(file);
+
         if suffix.is_empty() {
-            log::trace!("{:?}", cfg);
+            match confy::load_path(&file) {
+                Ok(config) => config,
+                Err(confy::ConfyError::GeneralLoadError(ref err))
+                    if err.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    T::default()
+                }
+                Err(err) => {
+                    panic!(
+                        "BetterDesk: cannot load primary configuration '{}': {}. Refusing to continue to protect device identity.",
+                        file.display(),
+                        err
+                    );
+                }
+            }
+        } else {
+            load_path(file)
         }
-        cfg
     }
+
 
     fn store_<T: serde::Serialize>(config: &T, suffix: &str) {
         let file = Self::file_(suffix);
