@@ -3787,6 +3787,66 @@ mod tests {
         fs::remove_file(&path).unwrap();
         fs::remove_dir(&test_dir).unwrap();
     }
+
+    
+    #[test]
+    fn test_first_run_identity_survives_second_open() {
+        sodiumoxide::init().expect("libsodium initialization failed");
+
+        let test_dir = std::env::temp_dir().join(format!(
+            "betterdesk-first-run-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&test_dir).unwrap();
+        let path = test_dir.join("identity.toml");
+
+        assert!(!path.exists());
+
+        // First start: create a new device ID and key pair.
+        let first_pair = Config::load_or_create_key_pair_at_path(
+            &path,
+            || Some("test-device-12345".to_owned()),
+        );
+
+        assert!(!first_pair.0.is_empty());
+        assert!(!first_pair.1.is_empty());
+
+        let first_config: Config = Config::load_primary_path(&path);
+
+        assert_eq!(first_config.id, "test-device-12345");
+        assert!(first_config.key_pair == first_pair);
+
+        let original_bytes = fs::read(&path).unwrap();
+
+        // Second start: ID generation must not run again.
+        let second_pair = Config::load_or_create_key_pair_at_path(
+            &path,
+            || panic!("Device ID must not be regenerated"),
+        );
+
+        let second_config: Config = Config::load_primary_path(&path);
+
+        assert_eq!(second_config.id, first_config.id);
+
+        assert!(
+            second_pair == first_pair,
+            "Device key pair changed after restart"
+        );
+
+        assert!(
+            second_config.key_pair == first_config.key_pair,
+            "Persisted device keys changed after restart"
+        );
+
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            original_bytes,
+            "Existing identity file was unexpectedly rewritten"
+        );
+
+        fs::remove_file(&path).unwrap();
+        fs::remove_dir(&test_dir).unwrap();
+    }
            
     #[test]
     fn test_serialize() {
