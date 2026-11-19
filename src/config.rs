@@ -3623,6 +3623,52 @@ mod tests {
 
         fs::remove_file(&path).unwrap();
     }
+
+    
+    #[test]
+    fn test_device_key_pair_survives_disk_roundtrip() {
+        sodiumoxide::init().expect("libsodium initialization failed");
+
+        let test_dir = std::env::temp_dir().join(format!(
+            "betterdesk-identity-key-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&test_dir).unwrap();
+        let path = test_dir.join("identity.toml");
+
+        let (public_key, secret_key) = sign::gen_keypair();
+        let expected_pair = (secret_key.0.to_vec(), public_key.0.to_vec());
+
+        let mut original = Config::default();
+        original.key_pair = expected_pair.clone();
+
+        store_path(path.clone(), original).unwrap();
+
+        // Read the identity back from disk, not from the cache.
+        let restored: Config = Config::load_primary_path(&path);
+
+        assert!(
+            restored.key_pair == expected_pair,
+            "Device key pair changed during disk roundtrip"
+        );
+
+        // Verify that the restored keys still form a valid pair.
+        let restored_sk =
+            sign::SecretKey::from_slice(&restored.key_pair.0).unwrap();
+        let restored_pk =
+            sign::PublicKey::from_slice(&restored.key_pair.1).unwrap();
+
+        let message = b"BetterDesk identity persistence test";
+        let signature = sign::sign_detached(message, &restored_sk);
+
+        assert!(
+            sign::verify_detached(&signature, message, &restored_pk),
+            "Restored device keys failed signature verification"
+        );
+
+        fs::remove_file(&path).unwrap();
+        fs::remove_dir(&test_dir).unwrap();
+    }
            
     #[test]
     fn test_serialize() {
