@@ -517,9 +517,11 @@ fn patch(path: PathBuf) -> PathBuf {
 }
 
 impl Config2 {
+    
     fn load() -> Config2 {
         let mut config = Config::load_::<Config2>("2");
         let mut store = false;
+
         if let Some(mut socks) = config.socks {
             let (password, _, store2) =
                 decrypt_str_or_original(&socks.password, PASSWORD_ENC_VERSION);
@@ -527,41 +529,11 @@ impl Config2 {
             config.socks = Some(socks);
             store |= store2;
         }
+
         let (unlock_pin, _, store2) =
             decrypt_str_or_original(&config.unlock_pin, PASSWORD_ENC_VERSION);
         config.unlock_pin = unlock_pin;
         store |= store2;
-        
-        // On a genuine first run, prepare both the device ID and
-        // the signing key pair before the first configuration write.
-        if first_run {
-            if config.id.is_empty() {
-                panic!(
-                    "BetterDesk: failed to generate the initial device ID. Refusing to create a configuration without an identity."
-                );
-            }
-
-            if config.key_pair.0.is_empty() {
-                let mut key_cache = KEY_PAIR.lock().unwrap();
-
-                let pair = match key_cache.as_ref() {
-                    Some(existing)
-                        if !existing.0.is_empty() && !existing.1.is_empty() =>
-                    {
-                        existing.clone()
-                    }
-                    _ => {
-                        let (pk, sk) = sign::gen_keypair();
-                        let generated = (sk.0.to_vec(), pk.0.to_vec());
-                        *key_cache = Some(generated.clone());
-                        generated
-                    }
-                };
-
-                config.key_pair = pair;
-                store = true;
-            }
-        }
 
         if store {
             config.store();
@@ -569,6 +541,7 @@ impl Config2 {
 
         config
     }
+
 
 
     pub fn file() -> PathBuf {
@@ -773,11 +746,44 @@ impl Config {
             }
         }
 
+        
+        // Prepare ID and signing keys together on first run.
+        if first_run {
+            if config.id.is_empty() {
+                panic!(
+                    "BetterDesk: failed to generate the initial device ID. Refusing to create a configuration without an identity."
+                );
+            }
+
+            if config.key_pair.0.is_empty() {
+                let mut key_cache = KEY_PAIR.lock().unwrap();
+
+                let pair = match key_cache.as_ref() {
+                    Some(existing)
+                        if !existing.0.is_empty() && !existing.1.is_empty() =>
+                    {
+                        existing.clone()
+                    }
+                    _ => {
+                        let (pk, sk) = sign::gen_keypair();
+                        let generated = (sk.0.to_vec(), pk.0.to_vec());
+                        *key_cache = Some(generated.clone());
+                        generated
+                    }
+                };
+
+                config.key_pair = pair;
+                store = true;
+            }
+        }
+
         if store {
             config.store();
         }
+
         config
     }
+
 
     fn validate_or_decrypt_permanent_password_storage(config: &mut Config) -> Result<()> {
         if config.password.is_empty() {
